@@ -48,18 +48,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Handle logout button
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
-        logoutBtn.addEventListener('click', function(e) {
-            // Check if in demo mode
-            if (sessionStorage.getItem('demoMode') === 'true') {
-                // Exit demo mode
-                sessionStorage.removeItem('demoMode');
-                sessionStorage.removeItem('demoUser');
-                document.getElementById('login-section').style.display = 'block';
-                document.getElementById('main-interface').style.display = 'none';
-                showNotification('Exited demo mode', 'success');
-                return;
-            }
-            
+        logoutBtn.addEventListener('click', function(e) {            
             // Normal logout process
             logoutBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing out...';
             logoutBtn.classList.add('disabled');
@@ -111,50 +100,9 @@ async function startMicrosoftLogin() {
     }
 }
 
-// Enable demo mode for testing
-function enableDemoMode() {
-    console.log('🎭 Enabling demo mode...');
-    
-    // Simulate authenticated user
-    const demoUser = {
-        authenticated: true,
-        name: 'Demo User',
-        email: 'demo@example.com',
-        id: 'demo-user-id',
-        roles: ['VID.Admin']
-    };
-    
-    // Store in session storage
-    sessionStorage.setItem('demoMode', 'true');
-    sessionStorage.setItem('demoUser', JSON.stringify(demoUser));
-    
-    // Update UI
-    document.getElementById('login-section').style.display = 'none';
-    document.getElementById('main-interface').style.display = 'block';
-    
-    // Update user info
-    updateUserInterface(demoUser);
-    
-    // Load initial data
-    loadCredentials();
-    
-    console.log('✅ Demo mode enabled successfully');
-}
-
 // Check authentication status
 async function checkAuthStatus() {
     console.log('🔍 Checking authentication status...');
-    
-    // Check for demo mode first
-    if (sessionStorage.getItem('demoMode') === 'true') {
-        console.log('🎭 Demo mode detected');
-        const demoUser = JSON.parse(sessionStorage.getItem('demoUser'));
-        document.getElementById('login-section').style.display = 'none';
-        document.getElementById('main-interface').style.display = 'block';
-        updateUserInterface(demoUser);
-        loadCredentials();
-        return;
-    }
     
     try {
         const response = await fetch('/auth/status', {
@@ -483,8 +431,7 @@ async function loadTroubleshootInfo() {
         const data = await response.json();
         
         if (data.success) {
-            displaySystemInfo(data.troubleshoot.environment);
-            displayRecentErrors(data.troubleshoot.recentErrors);
+            displayConsoleLogs(data.troubleshoot.consoleLogs);
         }
     } catch (error) {
         console.error('Erreur lors du chargement des informations de troubleshooting:', error);
@@ -517,67 +464,170 @@ async function testConfiguration() {
     }
 }
 
-// Nettoyage du cache
-async function cleanupCache() {
+// Display console logs
+function displayConsoleLogs(consoleLogs) {
+    const container = document.getElementById('console-logs');
+    if (!container) return;
+    
+    container.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5>Console Logs (${consoleLogs.totalLogs} total)</h5>
+            <div>
+                <button class="btn btn-sm btn-outline-info me-2" onclick="refreshConsoleLogs()">
+                    <i class="fas fa-refresh"></i> Refresh
+                </button>
+                <button class="btn btn-sm btn-outline-warning" onclick="clearConsoleLogs()">
+                    <i class="fas fa-trash"></i> Clear
+                </button>
+            </div>
+        </div>
+        
+        <!-- Filters -->
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <select class="form-select form-select-sm" id="log-type-filter" onchange="filterLogs()">
+                    <option value="">All types</option>
+                    <option value="error">Errors</option>
+                    <option value="warn">Warnings</option>
+                    <option value="info">Information</option>
+                    <option value="debug">Debug</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <input type="number" class="form-control form-control-sm" id="log-limit" 
+                       placeholder="Limit (default: 50)" value="50" onchange="filterLogs()">
+            </div>
+            <div class="col-md-4">
+                <input type="datetime-local" class="form-control form-control-sm" id="log-since" 
+                       onchange="filterLogs()" title="Since">
+            </div>
+        </div>
+        
+        <!-- Recent logs -->
+        <div class="console-logs-container" style="max-height: 400px; overflow-y: auto;">
+            ${consoleLogs.recentLogs.map(log => `
+                <div class="log-entry log-${log.type}" style="border-left: 4px solid ${getLogTypeColor(log.type)}; 
+                     padding: 8px; margin-bottom: 5px; background: #f8f9fa; font-family: monospace; font-size: 0.9em;">
+                    <div class="log-header" style="font-size: 0.8em; color: #6c757d; margin-bottom: 3px;">
+                        <span class="badge bg-${getLogTypeBadge(log.type)} me-2">${log.type.toUpperCase()}</span>
+                        <span>${new Date(log.timestamp).toLocaleString('en-US')}</span>
+                        ${log.sessionId ? `<span class="badge bg-secondary ms-2">${log.sessionId.slice(-8)}</span>` : ''}
+                    </div>
+                    <div class="log-message" style="word-break: break-word;">
+                        ${log.message}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+        
+        ${consoleLogs.errorLogs.length > 0 ? `
+        <div class="mt-4">
+            <h6 class="text-danger">Recent errors (${consoleLogs.errorLogs.length})</h6>
+            <div class="error-logs-container" style="max-height: 200px; overflow-y: auto;">
+                ${consoleLogs.errorLogs.map(log => `
+                    <div class="alert alert-danger py-2" style="font-family: monospace; font-size: 0.9em;">
+                        <small class="text-muted">${new Date(log.timestamp).toLocaleString('en-US')}</small><br>
+                        ${log.message}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        ` : ''}
+    `;
+}
+
+// Log utility functions
+function getLogTypeColor(type) {
+    const colors = {
+        'error': '#dc3545',
+        'warn': '#ffc107', 
+        'info': '#0d6efd',
+        'debug': '#6c757d'
+    };
+    return colors[type] || '#6c757d';
+}
+
+function getLogTypeBadge(type) {
+    const badges = {
+        'error': 'danger',
+        'warn': 'warning',
+        'info': 'primary', 
+        'debug': 'secondary'
+    };
+    return badges[type] || 'secondary';
+}
+
+// Refresh console logs
+async function refreshConsoleLogs() {
     try {
-        const response = await fetch('/api/admin/cleanup', {
+        const response = await fetch('/api/admin/console-logs?limit=50');
+        const data = await response.json();
+        
+        if (data.success) {
+            displayConsoleLogs({ 
+                recentLogs: data.logs, 
+                errorLogs: data.logs.filter(log => log.type === 'error'),
+                totalLogs: data.totalLogs 
+            });
+            showNotification('Logs refreshed', 'success');
+        }
+    } catch (error) {
+        console.error('Error refreshing logs:', error);
+        showNotification('Error refreshing logs', 'error');
+    }
+}
+
+// Filter logs
+async function filterLogs() {
+    const type = document.getElementById('log-type-filter').value;
+    const limit = document.getElementById('log-limit').value || 50;
+    const since = document.getElementById('log-since').value;
+    
+    try {
+        let url = `/api/admin/console-logs?limit=${limit}`;
+        if (type) url += `&type=${type}`;
+        if (since) url += `&since=${since}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.success) {
+            displayConsoleLogs({ 
+                recentLogs: data.logs, 
+                errorLogs: data.logs.filter(log => log.type === 'error'),
+                totalLogs: data.totalLogs 
+            });
+        }
+    } catch (error) {
+        console.error('Error filtering logs:', error);
+        showNotification('Error filtering logs', 'error');
+    }
+}
+
+// Clear all logs
+async function clearConsoleLogs() {
+    if (!confirm('Are you sure you want to clear all console logs?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/admin/clear-logs', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ olderThanHours: 24 })
+            headers: { 'Content-Type': 'application/json' }
         });
         
         const data = await response.json();
         
         if (data.success) {
-            showNotification(`${data.deletedCount} entrées supprimées`, 'success');
-            loadStats(); // Recharger les stats
+            showNotification('Logs cleared successfully', 'success');
+            refreshConsoleLogs();
+        } else {
+            showNotification('Error clearing logs', 'error');
         }
     } catch (error) {
-        console.error('Erreur lors du nettoyage:', error);
-        showNotification('Erreur lors du nettoyage du cache', 'error');
+        console.error('Error clearing logs:', error);
+        showNotification('Error clearing logs', 'error');
     }
-}
-
-// Affichage des erreurs récentes
-function displayRecentErrors(errors) {
-    const container = document.getElementById('recent-errors');
-    
-    if (!errors || errors.length === 0) {
-        container.innerHTML = '<div class="alert alert-success">Aucune erreur récente</div>';
-        return;
-    }
-    
-    container.innerHTML = errors.map(error => `
-        <div class="error-item">
-            <strong>Request ID:</strong> ${error.requestId}<br>
-            <strong>Type:</strong> ${error.credentialType}<br>
-            <strong>Date:</strong> ${formatDate(error.createdAt)}<br>
-            <strong>Erreur:</strong> ${error.error}
-        </div>
-    `).join('');
-}
-
-// Affichage des informations système
-function displaySystemInfo(env) {
-    const container = document.getElementById('system-info');
-    container.innerHTML = `
-        <div class="system-info-item">
-            <span>Version Node.js:</span>
-            <span>${env.nodeVersion}</span>
-        </div>
-        <div class="system-info-item">
-            <span>Plateforme:</span>
-            <span>${env.platform}</span>
-        </div>
-        <div class="system-info-item">
-            <span>Uptime:</span>
-            <span>${Math.floor(env.uptime / 3600)}h ${Math.floor((env.uptime % 3600) / 60)}m</span>
-        </div>
-        <div class="system-info-item">
-            <span>Mémoire utilisée:</span>
-            <span>${Math.round(env.memoryUsage.heapUsed / 1024 / 1024)} MB</span>
-        </div>
-    `;
 }
 
 // Utility functions

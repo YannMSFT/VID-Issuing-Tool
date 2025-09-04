@@ -155,16 +155,12 @@ router.get('/status', (req, res) => {
             }
         });
     } else if (!cca) {
-        // If MSAL is not configured, allow access in demo mode
-        console.log('⚠️  Demo mode: MSAL not configured, allowing demo access');
-        res.json({
-            authenticated: true,
-            user: {
-                name: 'Demo User',
-                username: 'demo@example.com',
-                isAdmin: true
-            },
-            demoMode: true
+        // If MSAL is not configured, return error
+        console.log('❌ MSAL not configured - authentication required');
+        res.status(500).json({
+            authenticated: false,
+            error: 'Authentication system not configured',
+            message: 'Please configure MSAL authentication with CLIENT_ID, CLIENT_SECRET, and TENANT_ID'
         });
     } else {
         console.log('❌ No user session found, requiring authentication');

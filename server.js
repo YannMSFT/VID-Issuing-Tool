@@ -5,6 +5,9 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
+// Initialiser le logger en premier pour capturer tous les logs
+const logger = require('./utils/logger');
+
 const authRoutes = require('./routes/auth');
 const credentialsRoutes = require('./routes/credentials');
 const usersRoutes = require('./routes/users');

@@ -8,7 +8,7 @@ const router = express.Router();
 async function getGraphToken() {
     try {
         if (!process.env.CLIENT_ID || process.env.CLIENT_ID === 'your-client-id-here') {
-            throw new Error('Missing configuration - demo mode');
+            throw new Error('Missing configuration - CLIENT_ID not configured');
         }
         
         const response = await axios.post(`https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/token`, {
@@ -33,69 +33,18 @@ router.get('/list', authModule.requireAuth, async (req, res) => {
     try {
         const { search, top = 20, skip = 0 } = req.query;
         
-        if (process.env.NODE_ENV === 'development' && (!process.env.CLIENT_ID || process.env.CLIENT_ID === 'your-client-id-here')) {
-            // Demo mode
-            const demoUsers = [
-                {
-                    id: '1',
-                    displayName: 'Alice Martin',
-                    email: 'alice.martin@demo.com',
-                    userPrincipalName: 'alice.martin@demo.com',
-                    jobTitle: 'Manager',
-                    department: 'IT',
-                    userType: 'Member'
-                },
-                {
-                    id: '2',
-                    displayName: 'Bob Dupont',
-                    email: 'bob.dupont@demo.com',
-                    userPrincipalName: 'bob.dupont@demo.com',
-                    jobTitle: 'Developer',
-                    department: 'Engineering',
-                    userType: 'Member'
-                },
-                {
-                    id: '3',
-                    displayName: 'Claire Moreau',
-                    email: 'claire.moreau@demo.com',
-                    userPrincipalName: 'claire.moreau@demo.com',
-                    jobTitle: 'Student',
-                    department: 'Education',
-                    userType: 'Member'
-                }
-            ];
-            
-            let filteredUsers = demoUsers;
-            if (search) {
-                filteredUsers = demoUsers.filter(user => 
-                    user.displayName.toLowerCase().includes(search.toLowerCase()) ||
-                    user.email.toLowerCase().includes(search.toLowerCase())
-                );
-            }
-            
-            res.json({
-                success: true,
-                users: filteredUsers,
-                totalCount: filteredUsers.length
-            });
-            return;
-        }
+        console.log('🔍 User list request debug:');
+        console.log('NODE_ENV:', process.env.NODE_ENV);
+        console.log('CLIENT_ID:', process.env.CLIENT_ID);
         
         const accessToken = await getGraphToken();
         
-        // Build filter to exclude service accounts and conference rooms
+        // Build basic filter that is compatible with Microsoft Graph
         const baseFilters = [
             "userType eq 'Member'", // Only regular members, not guests
-            "accountEnabled eq true", // Only active accounts
-            "not startswith(displayName,'Room')", // Exclude conference rooms starting with "Room"
-            "not startswith(displayName,'Conf')", // Exclude conference rooms starting with "Conf"
-            "not startswith(displayName,'Conference')", // Exclude conference rooms starting with "Conference"
-            "not endswith(displayName,'Room')", // Exclude accounts ending with "Room"
-            "not startswith(userPrincipalName,'svc-')", // Exclude service accounts starting with svc-
-            "not startswith(userPrincipalName,'service')", // Exclude service accounts starting with service
-            "not startswith(userPrincipalName,'admin')", // Exclude admin service accounts
-            "not contains(displayName,'Service')", // Exclude accounts containing "Service"
-            "mail ne null" // Only users with email addresses
+            "accountEnabled eq true" // Only active accounts
+            // Note: Removed 'mail ne null' as it's not supported by Graph API
+            // We'll filter for users with mail addresses client-side instead
         ];
         
         let url = `https://graph.microsoft.com/v1.0/users?$top=${top}&$select=id,displayName,userPrincipalName,mail,jobTitle,department,userType,accountEnabled`;
@@ -116,25 +65,39 @@ router.get('/list', authModule.requireAuth, async (req, res) => {
             }
         });
 
-        // Additional client-side filtering as a backup
+        // Enhanced client-side filtering to exclude service accounts and conference rooms
         const filteredUsers = response.data.value.filter(user => {
             const displayName = (user.displayName || '').toLowerCase();
             const upn = (user.userPrincipalName || '').toLowerCase();
             
-            // Skip conference rooms and service accounts
+            // Skip conference rooms
             const isConferenceRoom = displayName.includes('room') || 
                                    displayName.includes('conf') || 
                                    displayName.includes('meeting') ||
-                                   displayName.includes('salle');
+                                   displayName.includes('salle') ||
+                                   displayName.includes('conference');
                                    
+            // Skip service accounts
             const isServiceAccount = upn.startsWith('svc-') || 
                                    upn.startsWith('service') || 
                                    upn.startsWith('admin') ||
+                                   upn.includes('noreply') ||
+                                   upn.includes('no-reply') ||
                                    displayName.includes('service') ||
                                    displayName.includes('system') ||
-                                   displayName.includes('sync');
+                                   displayName.includes('sync') ||
+                                   displayName.includes('admin') ||
+                                   displayName.includes('test') ||
+                                   displayName.includes('mailbox');
             
-            return !isConferenceRoom && !isServiceAccount && user.mail && user.userType === 'Member';
+            // Only include users with valid attributes
+            const hasValidAttributes = user.mail && // Must have email address
+                                     user.userType === 'Member' && 
+                                     user.accountEnabled &&
+                                     user.displayName &&
+                                     !displayName.startsWith('__');
+            
+            return !isConferenceRoom && !isServiceAccount && hasValidAttributes;
         });
 
         res.json({
@@ -153,54 +116,51 @@ router.get('/list', authModule.requireAuth, async (req, res) => {
                      `Filtered out ${response.data.value.length - filteredUsers.length} service accounts/conference rooms` : null
         });
     } catch (error) {
-        console.error('Erreur lors de la récupération des utilisateurs:', error.response?.data || error);
+        console.error('Error retrieving users:', error.response?.data || error);
+        console.error('Full error details:', {
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            message: error.message,
+            data: error.response?.data
+        });
         
-        // Check if it's a permissions error and provide demo users
+        // Check if it's a permissions error and return proper error
         const errorMessage = error.response?.data?.error?.message || error.message || '';
         const isPermissionError = error.response?.status === 400 || error.response?.status === 403;
         
         if (isPermissionError) {
-            console.log('⚠️  Graph API permissions issue, providing demo users');
-            const demoUsers = [
-                {
-                    id: 'demo-user-1',
-                    displayName: 'John Doe',
-                    email: 'john.doe@contoso.com',
-                    userPrincipalName: 'john.doe@contoso.com',
-                    jobTitle: 'Software Engineer',
-                    department: 'Engineering'
-                },
-                {
-                    id: 'demo-user-2',
-                    displayName: 'Jane Smith',
-                    email: 'jane.smith@contoso.com', 
-                    userPrincipalName: 'jane.smith@contoso.com',
-                    jobTitle: 'Project Manager',
-                    department: 'Management'
-                },
-                {
-                    id: 'demo-user-3',
-                    displayName: 'Bob Johnson',
-                    email: 'bob.johnson@contoso.com',
-                    userPrincipalName: 'bob.johnson@contoso.com', 
-                    jobTitle: 'Security Analyst',
-                    department: 'Security'
-                }
-            ];
+            console.log('❌ Graph API permissions issue detected');
+            console.log('Please ensure the following permissions are granted with admin consent:');
+            console.log('- User.Read.All (Application)');
+            console.log('- Directory.Read.All (Application)');
             
-            return res.json({
-                success: true,
-                users: demoUsers,
-                totalCount: demoUsers.length,
-                message: '⚠️ Demo mode: Grant Microsoft Graph permissions to see real users',
-                demoMode: true
+            return res.status(403).json({
+                success: false,
+                error: 'Microsoft Graph API permissions required',
+                message: 'Please grant admin consent for User.Read.All and Directory.Read.All permissions in your App Registration.',
+                permissionsHelp: {
+                    required: ['User.Read.All (Application)', 'Directory.Read.All (Application)'],
+                    grantConsentUrl: `https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${process.env.CLIENT_ID}/isMSAApp~/false`
+                }
             });
         }
         
         res.status(500).json({
             success: false,
-            error: 'Erreur lors de la récupération des utilisateurs',
-            details: error.response?.data || error.message
+            error: 'Error retrieving users',
+            details: error.response?.data || error.message,
+            troubleshooting: {
+                possibleCauses: [
+                    'Missing Microsoft Graph permissions',
+                    'Admin consent not granted',
+                    'Invalid tenant/client configuration'
+                ],
+                nextSteps: [
+                    'Check App Registration permissions in Azure portal',
+                    'Grant admin consent for User.Read.All and Directory.Read.All',
+                    'Verify TENANT_ID and CLIENT_ID in .env file'
+                ]
+            }
         });
     }
 });
@@ -251,18 +211,10 @@ router.post('/search', authModule.requireAuth, async (req, res) => {
         const { filters, top = 20, skip = 0 } = req.body;
         const accessToken = await getGraphToken();
         
-        // Base filters to exclude service accounts and conference rooms
+        // Basic filters compatible with Microsoft Graph
         const baseFilters = [
             "userType eq 'Member'",
             "accountEnabled eq true",
-            "not startswith(displayName,'Room')",
-            "not startswith(displayName,'Conf')",
-            "not startswith(displayName,'Conference')",
-            "not endswith(displayName,'Room')",
-            "not startswith(userPrincipalName,'svc-')",
-            "not startswith(userPrincipalName,'service')",
-            "not startswith(userPrincipalName,'admin')",
-            "not contains(displayName,'Service')",
             "mail ne null"
         ];
         
@@ -298,7 +250,7 @@ router.post('/search', authModule.requireAuth, async (req, res) => {
             }
         });
 
-        // Additional client-side filtering as a backup
+        // Enhanced client-side filtering for search results
         const filteredUsers = response.data.value.filter(user => {
             const displayName = (user.displayName || '').toLowerCase();
             const upn = (user.userPrincipalName || '').toLowerCase();
@@ -306,16 +258,28 @@ router.post('/search', authModule.requireAuth, async (req, res) => {
             const isConferenceRoom = displayName.includes('room') || 
                                    displayName.includes('conf') || 
                                    displayName.includes('meeting') ||
-                                   displayName.includes('salle');
+                                   displayName.includes('salle') ||
+                                   displayName.includes('conference');
                                    
             const isServiceAccount = upn.startsWith('svc-') || 
                                    upn.startsWith('service') || 
                                    upn.startsWith('admin') ||
+                                   upn.includes('noreply') ||
+                                   upn.includes('no-reply') ||
                                    displayName.includes('service') ||
                                    displayName.includes('system') ||
-                                   displayName.includes('sync');
+                                   displayName.includes('sync') ||
+                                   displayName.includes('admin') ||
+                                   displayName.includes('test') ||
+                                   displayName.includes('mailbox');
             
-            return !isConferenceRoom && !isServiceAccount && user.mail && user.userType === 'Member';
+            const hasValidAttributes = user.mail && 
+                                     user.userType === 'Member' && 
+                                     user.accountEnabled &&
+                                     user.displayName &&
+                                     !displayName.startsWith('__');
+            
+            return !isConferenceRoom && !isServiceAccount && hasValidAttributes;
         });
 
         res.json({

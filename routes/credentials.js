@@ -8,16 +8,14 @@ const authModule = require('./auth');
 const router = express.Router();
 const cache = new NodeCache({ stdTTL: 600 }); // Cache 10 minutes
 
-const express = require('express');
-const axios = require('axios');
-const QRCode = require('qrcode');
-const { v4: uuidv4 } = require('uuid');
+// Cache to store PIN support information for contracts (longer TTL)
+const pinSupportCache = new NodeCache({ stdTTL: 86400 }); // Cache 24 hours
 
 // Utility function to get access token
 async function getAccessToken(customScope = null) {
     try {
         if (!process.env.CLIENT_ID || process.env.CLIENT_ID === 'your-client-id-here') {
-            throw new Error('Missing configuration - demo mode enabled');
+            throw new Error('Missing configuration - CLIENT_ID not configured');
         }
         
         const scope = customScope || process.env.VERIFIABLE_CREDENTIALS_API_SCOPE || 'https://graph.microsoft.com/.default';
@@ -68,71 +66,21 @@ router.get('/list', authModule.requireAuth, async (req, res) => {
     try {
         console.log('🔍 Listing available credentials...');
         
-        // Check if we have proper configuration for production mode
+        // Check if we have proper configuration
         if (!process.env.CLIENT_ID || process.env.CLIENT_ID === 'your-client-id-here') {
-            // Demo mode - return sample credentials
-            console.log('⚠️  Demo mode - Returning sample credentials for testing');
-            const demoCredentials = [
-                {
-                    id: 'demo-employee-card',
-                    name: 'Employee ID Card',
-                    displayName: 'Employee ID Card',
-                    description: 'A verifiable employee identification credential for demonstration',
-                    type: ['VerifiableCredential', 'EmployeeCard'],
-                    issuer: 'Demo Organization',
-                    status: 'Available',
-                    styling: {
-                        backgroundColor: '#2D5D9B',
-                        textColor: '#FFFFFF',
-                        logo: {
-                            uri: 'https://didcustomerplayground.blob.core.windows.net/public/VerifiedEmployeeBadge.png',
-                            description: 'Employee Badge'
-                        }
-                    },
-                    claims: [
-                        { claim: 'given_name', label: 'First Name', type: 'string' },
-                        { claim: 'family_name', label: 'Last Name', type: 'string' },
-                        { claim: 'employee_id', label: 'Employee ID', type: 'string' },
-                        { claim: 'department', label: 'Department', type: 'string' },
-                        { claim: 'position', label: 'Job Title', type: 'string' }
-                    ]
-                },
-                {
-                    id: 'demo-certification',
-                    name: 'Professional Certification',
-                    displayName: 'Professional Certification',
-                    description: 'A verifiable professional certification credential for demonstration',
-                    type: ['VerifiableCredential', 'ProfessionalCertification'],
-                    issuer: 'Demo Certification Authority',
-                    status: 'Available',
-                    styling: {
-                        backgroundColor: '#8B4513',
-                        textColor: '#FFFFFF',
-                        logo: {
-                            uri: 'https://didcustomerplayground.blob.core.windows.net/public/VerifiedCredentialExpert.png',
-                            description: 'Certification Logo'
-                        }
-                    },
-                    claims: [
-                        { claim: 'given_name', label: 'First Name', type: 'string' },
-                        { claim: 'family_name', label: 'Last Name', type: 'string' },
-                        { claim: 'certification', label: 'Certification Type', type: 'string' },
-                        { claim: 'issueDate', label: 'Issue Date', type: 'string' },
-                        { claim: 'expiryDate', label: 'Expiry Date', type: 'string' }
-                    ]
+            return res.status(500).json({
+                success: false,
+                error: 'Application not properly configured',
+                message: 'Please configure CLIENT_ID and other environment variables',
+                troubleshooting: {
+                    requiredConfig: ['CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID'],
+                    configFile: '.env file in project root'
                 }
-            ];
-
-            res.json({
-                success: true,
-                credentials: demoCredentials,
-                message: 'Demo mode - Sample credentials available (Complete Entra ID configuration to use production)'
             });
-            return;
         }
 
-        // Production mode - Get real credentials from Microsoft Verified Credentials Admin API
-        console.log('🚀 Production mode - Retrieving credentials from Microsoft Verified Credentials Admin API');
+        // Get real credentials from Microsoft Verified Credentials Admin API
+        console.log('🚀 Retrieving credentials from Microsoft Verified Credentials Admin API');
         const accessToken = await getAccessToken();
     
         // Step 1: Get all authorities
@@ -229,45 +177,21 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
 
         const requestId = uuidv4();
         
-        // Check if we have proper configuration for production mode
+        // Check if we have proper configuration
         if (!process.env.CLIENT_ID || process.env.CLIENT_ID === 'your-client-id-here') {
-            // Demo mode - generate a mock QR code
-            console.log('⚠️  Demo mode - Generating demo credential for testing');
-            const demoUrl = `openid://vc/?request_uri=https://verifiedid.did.msidentity.com/v1.0/${requestId}`;
-            const qrCodeDataUrl = await QRCode.toDataURL(demoUrl, {
-                width: 300,
-                margin: 2,
-                color: {
-                    dark: '#000000',
-                    light: '#FFFFFF'
+            return res.status(500).json({
+                success: false,
+                error: 'Application not properly configured',
+                message: 'Please configure CLIENT_ID and other environment variables',
+                troubleshooting: {
+                    requiredConfig: ['CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID'],
+                    configFile: '.env file in project root'
                 }
             });
-
-            // Store temporarily for tracking
-            cache.set(requestId, {
-                requestId,
-                credentialType,
-                userId,
-                userEmail,
-                status: 'pending',
-                createdAt: new Date(),
-                issuanceResponse: { demo: true }
-            });
-
-            res.json({
-                success: true,
-                requestId: requestId,
-                qrCodeUrl: qrCodeDataUrl,
-                deepLink: demoUrl,
-                expiry: new Date(Date.now() + 10 * 60 * 1000),
-                pin: "DEMO",
-                message: 'Credential issued successfully (demo mode). Scan the QR code with Microsoft Authenticator.'
-            });
-            return;
         }
 
-        // Production mode - Get access token for Request Service API (different scope!)
-        console.log('🚀 Production mode - Issuing real credential via Microsoft Verified Credentials Request Service API');
+        // Get access token for Request Service API (different scope!)
+        console.log('🚀 Issuing real credential via Microsoft Verified Credentials Request Service API');
         
         // Use different scope for issuance requests
         const requestServiceScope = process.env.REQUEST_SERVICE_API_SCOPE || '3db474b9-6a0c-4840-96ac-1fceb342124f/.default';
@@ -355,55 +279,125 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
             };
         }
 
-        // Add PIN for additional security (but not for contracts that don't support it)
-        const contractsWithoutPin = [
-            'cf556239-b075-168d-f093-a3b1a388ae20', // Verified Employee
-            'fb6e59ab-6c5d-4ce3-376d-a20a4f3f0d2f'  // Security Clearance Secret
-        ];
-
-        if (!contractsWithoutPin.includes(credentialType)) {
-            issuanceRequest.pin = {
-                value: Math.floor(1000 + Math.random() * 9000).toString(),
-                length: 4
-            };
-        } else {
-            console.log('🚫 PIN excluded for this contract type (not supported)');
-        }
-
-        console.log('📝 Final issuance request payload:', JSON.stringify(issuanceRequest, null, 2));
+        console.log('📝 Base issuance request payload:', JSON.stringify(issuanceRequest, null, 2));
 
         // Try the correct endpoint for Request Service API
         let response;
         let requestServiceUrl = `${process.env.REQUEST_SERVICE_URL}/verifiableCredentials/createIssuanceRequest`;
+        let usedPin = null; // Track the PIN actually used in the successful request
+        
+        // First attempt: Try with PIN (default behavior)
+        const pin = {
+            value: Math.floor(1000 + Math.random() * 9000).toString(),
+            length: 4
+        };
+        const issuanceRequestWithPin = {
+            ...issuanceRequest,
+            pin: pin
+        };
+        
+        console.log('🔐 First attempt: Trying issuance WITH PIN...');
         
         try {
-            console.log(`📡 Calling Request Service API at: ${requestServiceUrl}`);
-            response = await axios.post(requestServiceUrl, issuanceRequest, {
+            console.log(`� Calling Request Service API at: ${requestServiceUrl}`);
+            response = await axios.post(requestServiceUrl, issuanceRequestWithPin, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json'
                 }
             });
-        } catch (error) {
-            if (error.response?.status === 404) {
-                // Try alternative endpoint structure
-                requestServiceUrl = `${process.env.REQUEST_SERVICE_URL}/createIssuanceRequest`;
-                console.log(`🔄 Trying alternative endpoint: ${requestServiceUrl}`);
+            
+            console.log('✅ Issuance successful WITH PIN');
+            usedPin = pin.value; // Store the PIN value for response
+            
+        } catch (pinError) {
+            console.log('⚠️  PIN attempt failed, checking if it\'s a PIN-related error...');
+            
+            // Check if the error is related to PIN not being supported
+            const errorMessage = pinError.response?.data?.error?.message || pinError.message || '';
+            const isPinError = errorMessage.toLowerCase().includes('pin') || 
+                             errorMessage.toLowerCase().includes('not supported') ||
+                             pinError.response?.status === 400;
+            
+            if (isPinError) {
+                console.log('🔄 PIN not supported for this contract, retrying WITHOUT PIN...');
                 
-                response = await axios.post(requestServiceUrl, issuanceRequest, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
+                // Second attempt: Try without PIN
+                try {
+                    response = await axios.post(requestServiceUrl, issuanceRequest, {
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    console.log('✅ Issuance successful WITHOUT PIN');
+                    console.log(`📝 Contract ${credentialType} does not support PIN - this will be remembered`);
+                    usedPin = null; // No PIN used
+                    
+                } catch (noPinError) {
+                    // If both attempts fail, try alternative endpoint
+                    if (noPinError.response?.status === 404) {
+                        requestServiceUrl = `${process.env.REQUEST_SERVICE_URL}/createIssuanceRequest`;
+                        console.log(`� Trying alternative endpoint without PIN: ${requestServiceUrl}`);
+                        
+                        response = await axios.post(requestServiceUrl, issuanceRequest, {
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                        usedPin = null; // No PIN used (alternative endpoint)
+                        throw noPinError;
                     }
-                });
+                }
+            } else if (pinError.response?.status === 404) {
+                // Try alternative endpoint with PIN first
+                requestServiceUrl = `${process.env.REQUEST_SERVICE_URL}/createIssuanceRequest`;
+                console.log(`🔄 Trying alternative endpoint WITH PIN: ${requestServiceUrl}`);
+                
+                try {
+                    response = await axios.post(requestServiceUrl, issuanceRequestWithPin, {
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    console.log('✅ Issuance successful WITH PIN (alternative endpoint)');
+                    usedPin = pin.value; // Store the PIN value for response (alternative endpoint)
+                    
+                } catch (altPinError) {
+                    // Check again if PIN is the issue on alternative endpoint
+                    const altErrorMessage = altPinError.response?.data?.error?.message || altPinError.message || '';
+                    const isAltPinError = altErrorMessage.toLowerCase().includes('pin') || 
+                                        altErrorMessage.toLowerCase().includes('not supported') ||
+                                        altPinError.response?.status === 400;
+                    
+                    if (isAltPinError) {
+                        console.log('🔄 PIN not supported on alternative endpoint, retrying WITHOUT PIN...');
+                        
+                        response = await axios.post(requestServiceUrl, issuanceRequest, {
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                        
+                        console.log('✅ Issuance successful WITHOUT PIN (alternative endpoint)');
+                        usedPin = null; // No PIN used (alternative endpoint)
+                    } else {
+                        throw altPinError;
+                    }
+                }
             } else {
                 console.error(`❌ Request Service API error:`, {
-                    status: error.response?.status,
-                    statusText: error.response?.statusText,
-                    data: error.response?.data,
+                    status: pinError.response?.status,
+                    statusText: pinError.response?.statusText,
+                    data: pinError.response?.data,
                     url: requestServiceUrl
                 });
-                throw error;
+                throw pinError;
             }
         }
 
@@ -437,8 +431,10 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
             qrCodeUrl: qrCodeDataUrl,
             deepLink: response.data.url,
             expiry: response.data.expiry,
-            pin: issuanceRequest.pin?.value || null,
-            message: 'Credential issued successfully. Scan the QR code with Microsoft Authenticator.'
+            pin: usedPin,
+            message: usedPin ? 
+                `Credential issued successfully. Use PIN: ${usedPin}. Scan the QR code with Microsoft Authenticator.` :
+                'Credential issued successfully. Scan the QR code with Microsoft Authenticator.'
         });
 
     } catch (error) {
@@ -499,6 +495,22 @@ router.get('/status/:requestId', authModule.requireAuth, (req, res) => {
             error: 'Failed to get issuance status'
         });
     }
+});
+
+// Add a route to view PIN support cache (for debugging)
+router.get('/pin-support-cache', authModule.requireAuth, (req, res) => {
+    const cacheKeys = pinSupportCache.keys();
+    const cacheData = {};
+    
+    cacheKeys.forEach(key => {
+        cacheData[key] = pinSupportCache.get(key);
+    });
+    
+    res.json({
+        success: true,
+        pinSupportCache: cacheData,
+        totalCachedContracts: cacheKeys.length
+    });
 });
 
 module.exports = router;

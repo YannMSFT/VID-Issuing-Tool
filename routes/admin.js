@@ -1,6 +1,7 @@
 const express = require('express');
 const authModule = require('./auth');
 const NodeCache = require('node-cache');
+const logger = require('../utils/logger');
 
 const router = express.Router();
 const cache = new NodeCache();
@@ -145,6 +146,10 @@ router.get('/troubleshoot', authModule.requireAuth, (req, res) => {
         const allRequests = allKeys.map(key => cache.get(key)).filter(Boolean);
         const errorRequests = allRequests.filter(r => r.status === 'error');
         
+        // Récupérer les logs récents
+        const recentLogs = logger.getFilteredLogs({ limit: 100 });
+        const errorLogs = logger.getFilteredLogs({ type: 'error', limit: 20 });
+        
         const troubleshootInfo = {
             cacheStatus: {
                 totalEntries: allRequests.length,
@@ -161,6 +166,11 @@ router.get('/troubleshoot', authModule.requireAuth, (req, res) => {
                     callbackData: r.callbackData,
                     error: r.issuanceResponse?.error || 'Unknown error'
                 })),
+            consoleLogs: {
+                recentLogs: recentLogs,
+                errorLogs: errorLogs,
+                totalLogs: logger.getAllLogs().length
+            },
             environment: {
                 nodeVersion: process.version,
                 platform: process.platform,
@@ -178,6 +188,52 @@ router.get('/troubleshoot', authModule.requireAuth, (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Error retrieving troubleshooting information'
+        });
+    }
+});
+
+// Route to get console logs only
+router.get('/console-logs', authModule.requireAuth, (req, res) => {
+    try {
+        const { limit = 50, type, sessionId, since } = req.query;
+        
+        const filters = { limit: parseInt(limit) };
+        if (type) filters.type = type;
+        if (sessionId) filters.sessionId = sessionId;
+        if (since) filters.since = since;
+        
+        const logs = logger.getFilteredLogs(filters);
+        
+        res.json({
+            success: true,
+            logs: logs,
+            totalLogs: logger.getAllLogs().length,
+            filters: filters
+        });
+    } catch (error) {
+        console.error('Error retrieving console logs:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Error retrieving console logs'
+        });
+    }
+});
+
+// Route to clear console logs
+router.post('/clear-logs', authModule.requireAuth, (req, res) => {
+    try {
+        logger.clearLogs();
+        console.log('Console logs cleared by admin');
+        
+        res.json({
+            success: true,
+            message: 'All console logs have been cleared'
+        });
+    } catch (error) {
+        console.error('Error clearing console logs:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Error clearing console logs'
         });
     }
 });
