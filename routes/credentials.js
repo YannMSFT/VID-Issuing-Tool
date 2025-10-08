@@ -163,6 +163,37 @@ router.get('/list', authModule.requireAuth, async (req, res) => {
     }
 });
 
+// Helper function to get user details from Microsoft Graph
+async function getUserDetails(userId) {
+    try {
+        const graphToken = await axios.post(`https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/token`, {
+            client_id: process.env.CLIENT_ID,
+            client_secret: process.env.CLIENT_SECRET,
+            scope: 'https://graph.microsoft.com/.default',
+            grant_type: 'client_credentials'
+        }, {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+        });
+        
+        const accessToken = graphToken.data.access_token;
+        
+        const userResponse = await axios.get(`https://graph.microsoft.com/v1.0/users/${userId}?$select=id,displayName,givenName,surname,mail,jobTitle,userPrincipalName`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        console.log(`👤 Retrieved user details for: ${userResponse.data.displayName}`);
+        return userResponse.data;
+    } catch (error) {
+        console.error('❌ Error getting user details from Graph:', error.response?.data || error.message);
+        throw new Error('Unable to retrieve user details');
+    }
+}
+
 // Route to issue a credential
 router.post('/issue', authModule.requireAuth, async (req, res) => {
     try {
@@ -189,6 +220,10 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
                 }
             });
         }
+
+        // Get user details from Microsoft Graph
+        console.log(`📥 Fetching user details for userId: ${userId}`);
+        const userDetails = await getUserDetails(userId);
 
         // Get access token for Request Service API (different scope!)
         console.log('🚀 Issuing real credential via Microsoft Verified Credentials Request Service API');
@@ -221,22 +256,25 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
         // Configure based on known contract types (from our previous analysis)
         let issuanceRequest;
         
+        // For ALL contract types, we'll try to provide the user's claims
+        // This works for self-issued attestations and doesn't hurt IdToken attestations
+        
         if (credentialType === 'cf556239-b075-168d-f093-a3b1a388ae20') {
             // Verified Employee - uses pre-configured attestations in Azure portal
-            console.log('🎯 Configuring for Verified Employee (using portal attestations)');
+            console.log('🎯 Configuring for Verified Employee (portal attestations)');
             
             issuanceRequest = {
                 ...baseIssuanceRequest
-                // No requestedAccessToken - uses contract attestations
+                // Portal attestations will automatically pull user data from Graph
             };
             
         } else if (credentialType === 'fb6e59ab-6c5d-4ce3-376d-a20a4f3f0d2f') {
             // Security Clearance Secret - uses pre-configured attestations in Azure portal
-            console.log('🎯 Configuring for Security Clearance Secret (using portal attestations)');
+            console.log('🎯 Configuring for Security Clearance Secret (portal attestations)');
             
             issuanceRequest = {
                 ...baseIssuanceRequest
-                // No requestedIdToken - uses contract attestations
+                // Portal attestations will automatically pull user data from Graph
             };
             
         } else if (credentialType === '3831cbe2-b4e8-793b-100a-874ebd3e50a1') {
@@ -246,10 +284,10 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
             issuanceRequest = {
                 ...baseIssuanceRequest,
                 claims: {
-                    "given_name": "John",
-                    "family_name": "Doe", 
-                    "email": "john.doe@example.com",
-                    "jobTitle": "Employee"
+                    "given_name": userDetails.givenName || userDetails.displayName?.split(' ')[0] || "Unknown",
+                    "family_name": userDetails.surname || userDetails.displayName?.split(' ').slice(1).join(' ') || "Unknown", 
+                    "email": userDetails.mail || userDetails.userPrincipalName,
+                    "jobTitle": userDetails.jobTitle || "Employee"
                 }
             };
             
@@ -260,25 +298,36 @@ router.post('/issue', authModule.requireAuth, async (req, res) => {
             issuanceRequest = {
                 ...baseIssuanceRequest,
                 claims: {
-                    "displayName": "Test User",
-                    "givenName": "Test", 
-                    "surname": "User",
-                    "jobTitle": "Employee"
+                    "displayName": userDetails.displayName || "Unknown User",
+                    "givenName": userDetails.givenName || userDetails.displayName?.split(' ')[0] || "Unknown", 
+                    "surname": userDetails.surname || userDetails.displayName?.split(' ').slice(1).join(' ') || "Unknown",
+                    "jobTitle": userDetails.jobTitle || "Employee"
                 }
             };
             
         } else {
-            // Unknown contract type - use basic structure
-            console.log('⚠️  Unknown contract type, using basic configuration');
+            // Unknown contract type - use basic structure with real user data
+            console.log('⚠️  Unknown contract type, using basic configuration with user data');
             
             issuanceRequest = {
                 ...baseIssuanceRequest,
                 claims: {
-                    "displayName": "Default User"
+                    "displayName": userDetails.displayName || "Unknown User",
+                    "givenName": userDetails.givenName,
+                    "surname": userDetails.surname,
+                    "mail": userDetails.mail || userDetails.userPrincipalName,
+                    "jobTitle": userDetails.jobTitle
                 }
             };
         }
 
+        console.log('📝 User details being used:', JSON.stringify({
+            givenName: userDetails.givenName,
+            surname: userDetails.surname,
+            displayName: userDetails.displayName,
+            mail: userDetails.mail,
+            jobTitle: userDetails.jobTitle
+        }, null, 2));
         console.log('📝 Base issuance request payload:', JSON.stringify(issuanceRequest, null, 2));
 
         // Try the correct endpoint for Request Service API
